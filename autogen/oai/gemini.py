@@ -258,6 +258,10 @@ class GeminiClient:
 
         response = chat.send_message(gemini_messages[-1].parts, stream=stream, safety_settings=safety_settings)
 
+        # Added this line to fix IncompleteIterationError for Gemini
+        if stream:
+            response.resolve()
+
         # Extract text and tools from response
         ans = ""
         random_id = random.randint(0, 10000)
