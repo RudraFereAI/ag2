@@ -196,6 +196,7 @@ class GeminiClient:
                 "Streaming is not supported for Gemini yet, and it will have no effect. Please set stream=False.",
                 UserWarning,
             )
+            # stream = False  # Force stream to False regardless of input
 
         if n_response > 1:
             warnings.warn("Gemini only supports `n=1` for now. We only generate one response.", UserWarning)
@@ -223,6 +224,8 @@ class GeminiClient:
                 chat = model.start_chat(history=gemini_messages[:-1])
 
             response = chat.send_message(gemini_messages[-1].parts, stream=stream, safety_settings=safety_settings)
+            if stream:
+                response.resolve()
             ans: str = chat.history[-1].parts[0].text
             prompt_tokens = model.count_tokens(chat.history[:-1]).total_tokens
             completion_tokens = model.count_tokens(ans).total_tokens
