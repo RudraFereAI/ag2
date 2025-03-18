@@ -1449,7 +1449,7 @@ class ConversableAgent(LLMAgent):
         )
         print("Called resolved here")
         # Ensure the response is fully resolved before accessing any attributes for Gemini
-        response.resolve()
+        # response.resolve()
 
         extracted_response = llm_client.extract_text_or_completion_object(response)[0]
 
