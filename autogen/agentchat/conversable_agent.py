@@ -1447,6 +1447,9 @@ class ConversableAgent(LLMAgent):
         response = llm_client.create(
             context=messages[-1].pop("context", None), messages=all_messages, cache=cache, agent=self
         )
+        # Ensure the response is fully resolved before accessing any attributes for Gemini
+        response.resolve()
+        
         extracted_response = llm_client.extract_text_or_completion_object(response)[0]
 
         if extracted_response is None:
