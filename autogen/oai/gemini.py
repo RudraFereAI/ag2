@@ -612,7 +612,12 @@ class GeminiClient:
     def _create_gemini_function_parameters(function_parameter: dict[str, any]) -> dict[str, any]:
         """Convert function parameters to Gemini format, recursive"""
 
-        function_parameter["type_"] = function_parameter["type"].upper()
+        # Check if type key exists before trying to access it
+        if "type" in function_parameter:
+            function_parameter["type_"] = function_parameter["type"].upper()
+        else:
+            # Default to STRING if type is not provided
+            function_parameter["type_"] = "STRING"
 
         # Parameter properties and items
         if "properties" in function_parameter:
