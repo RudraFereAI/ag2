@@ -273,16 +273,24 @@ class GeminiClient:
 
                 # If we have a repeated function call, ignore it
                 if fn_call not in prev_function_calls:
+                    # Handle serialization of function arguments
+                    try:
+                        if fn_call.args is not None:
+                            # Convert args to serializable format
+                            serializable_args = self._convert_to_serializable(fn_call.args)
+                            args_json = json.dumps(serializable_args)
+                        else:
+                            args_json = ""
+                    except Exception as e:
+                        logger.warning(f"Error serializing function arguments: {str(e)}")
+                        args_json = "{}"  # Fallback to empty object
+                        
                     autogen_tool_calls.append(
                         ChatCompletionMessageToolCall(
-                            id=random_id,
+                            id=str(random_id),  # Convert to string to satisfy Pydantic validation
                             function={
                                 "name": fn_call.name,
-                                "arguments": (
-                                    json.dumps({key: val for key, val in fn_call.args.items()})
-                                    if fn_call.args is not None
-                                    else ""
-                                ),
+                                "arguments": args_json,
                             },
                             type="function",
                         )
@@ -329,14 +337,40 @@ class GeminiClient:
 
         return response_oai
 
+    def _convert_to_serializable(self, obj):
+        """Convert Google API types to serializable Python types."""
+        if hasattr(obj, "items") and callable(obj.items):
+            # Handle dictionary-like objects
+            return {k: self._convert_to_serializable(v) for k, v in obj.items()}
+        elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, dict)):
+            # Handle iterable objects (like RepeatedComposite)
+            return [self._convert_to_serializable(item) for item in obj]
+        elif hasattr(obj, "to_dict") and callable(obj.to_dict):
+            # Handle objects with to_dict method
+            return obj.to_dict()
+        elif hasattr(obj, "__dict__"):
+            # Handle objects with __dict__ attribute
+            return {k: self._convert_to_serializable(v) for k, v in obj.__dict__.items() if not k.startswith("_")}
+        else:
+            # Return primitive types as is
+            return obj
+
     def _oai_content_to_gemini_content(self, message: Dict[str, Any]) -> Tuple[List, str]:
         """Convert AutoGen content to Gemini parts, catering for text and tool calls"""
         rst = []
 
         if message["role"] == "tool":
             # Tool call recommendation
-
-            function_name = self.tool_call_function_map[message["tool_call_id"]]
+            # Ensure tool_call_id is a string
+            tool_call_id = str(message["tool_call_id"])
+            
+            # Get function name from the map
+            if tool_call_id in self.tool_call_function_map:
+                function_name = self.tool_call_function_map[tool_call_id]
+            else:
+                # Handle case where ID is not in map - logging and fallback
+                logger.warning(f"Tool call ID {tool_call_id} not found in function map. Using 'unknown_function' as fallback.")
+                function_name = "unknown_function"
 
             if self.use_vertexai:
                 rst.append(
@@ -356,10 +390,19 @@ class GeminiClient:
             return rst, "tool"
         elif "tool_calls" in message and len(message["tool_calls"]) != 0:
             for tool_call in message["tool_calls"]:
-
-                function_id = tool_call["id"]
+                # Ensure function_id is a string
+                function_id = str(tool_call["id"])
                 function_name = tool_call["function"]["name"]
+                
+                # Store in the map
                 self.tool_call_function_map[function_id] = function_name
+
+                # Parse the arguments safely
+                try:
+                    args = json.loads(tool_call["function"]["arguments"])
+                except json.JSONDecodeError:
+                    logger.warning(f"Error parsing tool call arguments for {function_name}. Using empty object.")
+                    args = {}
 
                 if self.use_vertexai:
                     rst.append(
@@ -367,7 +410,7 @@ class GeminiClient:
                             {
                                 "functionCall": {
                                     "name": function_name,
-                                    "args": json.loads(tool_call["function"]["arguments"]),
+                                    "args": args,
                                 }
                             }
                         )
@@ -377,7 +420,7 @@ class GeminiClient:
                         Part(
                             function_call=FunctionCall(
                                 name=function_name,
-                                args=json.loads(tool_call["function"]["arguments"]),
+                                args=args,
                             )
                         )
                     )
@@ -551,10 +594,18 @@ class GeminiClient:
         function_declaration = FunctionDeclaration()
         function_declaration.name = tool["function"]["name"]
         function_declaration.description = tool["function"]["description"]
-        if len(tool["function"]["parameters"]["properties"]) != 0:
-            function_declaration.parameters = GeminiClient._create_gemini_function_parameters(
-                copy.deepcopy(tool["function"]["parameters"])
-            )
+        
+        try:
+            # Check if parameters exist and have properties
+            if "parameters" in tool["function"] and "properties" in tool["function"]["parameters"]:
+                if len(tool["function"]["parameters"]["properties"]) != 0:
+                    function_declaration.parameters = GeminiClient._create_gemini_function_parameters(
+                        copy.deepcopy(tool["function"]["parameters"])
+                    )
+        except Exception as e:
+            logger.warning(f"Error processing function parameters for {tool['function']['name']}: {str(e)}")
+            # Provide simplified parameters if there's an error
+            function_declaration.parameters = {"type_": "OBJECT", "properties": {}}
 
         return function_declaration
 
@@ -562,7 +613,23 @@ class GeminiClient:
     def _create_gemini_function_declaration_schema(json_data) -> Schema:
         """Recursively creates Schema objects for FunctionDeclaration."""
         param_schema = Schema()
-        param_type = json_data["type"]
+        
+        # Handle anyOf field
+        if "anyOf" in json_data:
+            # Use the first item in anyOf or default to string
+            if json_data["anyOf"] and isinstance(json_data["anyOf"], list) and len(json_data["anyOf"]) > 0:
+                # Try to use the first item in anyOf as the type
+                first_schema = json_data["anyOf"][0]
+                if "type" in first_schema:
+                    param_type = first_schema["type"]
+                else:
+                    param_type = "string"  # Default to string for complex schemas
+            else:
+                param_type = "string"  # Default to string
+        elif "type" in json_data:
+            param_type = json_data["type"]
+        else:
+            param_type = "string"  # Default
 
         """
         TYPE_UNSPECIFIED = 0
@@ -603,6 +670,7 @@ class GeminiClient:
             param_schema.type_ = 1  # Treating these as strings for simplicity
         else:
             print(f"Warning: Unsupported parameter type '{param_type}'.")
+            param_schema.type_ = 1  # Default to string for unsupported types
 
         if "description" in json_data:
             param_schema.description = json_data["description"]
@@ -612,8 +680,14 @@ class GeminiClient:
     def _create_gemini_function_parameters(function_parameter: dict[str, any]) -> dict[str, any]:
         """Convert function parameters to Gemini format, recursive"""
 
+        # Handle unsupported JSON Schema features
+        if "anyOf" in function_parameter:
+            # For anyOf, simplify by defaulting to string type
+            function_parameter["type_"] = "STRING"
+            # Remove the anyOf field as it's not supported
+            del function_parameter["anyOf"]
         # Check if type key exists before trying to access it
-        if "type" in function_parameter:
+        elif "type" in function_parameter:
             function_parameter["type_"] = function_parameter["type"].upper()
         else:
             # Default to STRING if type is not provided
