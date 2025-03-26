@@ -478,7 +478,7 @@ class OpenAIClient:
             The completion.
         """
         iostream = IOStream.get_default()
-        process_llm_token = params.get("process_llm_token", lambda x: {"chunk": x})
+        process_llm_token = params.get("process_llm_token", lambda x: {"chunk": x}) # Edit
 
         if self.response_format is not None or "response_format" in params:
 
@@ -575,7 +575,7 @@ class OpenAIClient:
                         # If content is present, print it to the terminal and update response variables
                         if content is not None:
                             # iostream.send(StreamMessage(content=content))
-                            iostream.print(process_llm_token(content), end="", flush=True)
+                            iostream.print(process_llm_token(content), end="", flush=True) #Edit
                             response_contents[choice.index] += content
                             completion_tokens += 1
                         else:
