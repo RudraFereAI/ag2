@@ -574,8 +574,9 @@ class OpenAIClient:
 
                         # If content is present, print it to the terminal and update response variables
                         if content is not None:
-                            # iostream.send(StreamMessage(content=content))
-                            iostream.print(process_llm_token(content), end="", flush=True) #Edit
+                            # iostream.send(StreamMessage(content=content)) 
+                            processed_content = process_llm_token(content) # These two lines are edits
+                            iostream.send(StreamMessage(content=processed_content))
                             response_contents[choice.index] += content
                             completion_tokens += 1
                         else:
